@@ -52,8 +52,8 @@ export function CompanyReport({
       currency: "",
     };
 
-    console.log("Transaction customer:", t.CustomerName);
-    console.log("Using customerAccount:", customerAccount);
+    // console.log("Transaction customer:", t.CustomerName);
+    // console.log("Using customerAccount:", customerAccount);
 
     return {
       ...t,

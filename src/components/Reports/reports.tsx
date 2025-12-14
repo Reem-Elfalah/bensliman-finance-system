@@ -69,21 +69,20 @@ export function ReportGenerator({
   customerAccounts
 }: ClientReportProps) {
 
-  const transactionsWithAccounts: TransactionWithTreasury[] = (allTransactions || []).map(t => {
-    const customerAccount = t.customerAccount || {
-      name: t.CustomerName || "غير محدد",
-      account: "Unknown",
-      currency: "",
-    };
+  const transactionsWithAccounts: TransactionWithTreasury[] = useMemo(() => {
+    return (allTransactions || []).map(t => {
+      const customerAccount = t.customerAccount || {
+        name: t.CustomerName || "غير محدد",
+        account: "Unknown",
+        currency: "",
+      };
 
-    console.log("Transaction customer:", t.CustomerName);
-    console.log("Using customerAccount:", customerAccount);
-
-    return {
-      ...t,
-      customerAccount,
-    };
-  });
+      return {
+        ...t,
+        customerAccount,
+      };
+    });
+  }, [allTransactions]);
 
 
   const printRef = useRef<HTMLDivElement>(null);
@@ -194,6 +193,13 @@ export function ReportGenerator({
     return "";
   }, [selectedTransaction, allTransactions]);
 
+  // Reset PDF state when modal closes
+  useEffect(() => {
+    if (!isOpen) {
+      resetPdfState();
+    }
+  }, [isOpen]);
+
   // Auto-download when PDF URL is ready
   useEffect(() => {
     if (pdfUrl && !isPdfLoading && shouldGeneratePDF && reportClientName && !hasTriggeredDownload.current) {
@@ -206,10 +212,7 @@ export function ReportGenerator({
       document.body.removeChild(link);
       // Reset after download
       setTimeout(() => {
-        setShouldGeneratePDF(false);
-        setPdfUrl(null);
-        setIsPdfLoading(false);
-        hasTriggeredDownload.current = false;
+        resetPdfState();
       }, 100);
     }
   }, [pdfUrl, isPdfLoading, shouldGeneratePDF, reportClientName]);
@@ -476,7 +479,7 @@ export function ReportGenerator({
               shouldGeneratePDF ? (
                 <>
                   <PDFDownloadLink
-                    key={(reportClientName || "") + "-" + (clientTransactions?.length || 0) + "-" + (isOpen ? "open" : "closed")}
+                    key={(reportClientName || "") + "-" + (clientTransactions?.length || 0)}
                     document={
                       <PDFReport
                         key={(reportClientName || "") + "-" + (clientTransactions?.length || 0)}
@@ -496,8 +499,10 @@ export function ReportGenerator({
                     {/* @ts-ignore - PDFDownloadLink children function type mismatch */}
                     {({ loading, url }: any) => {
                       // Update state when URL becomes available
-                      setIsPdfLoading(loading);
-                      if (url) {
+                      if (loading !== isPdfLoading) {
+                        setIsPdfLoading(loading);
+                      }
+                      if (url && url !== pdfUrl) {
                         setPdfUrl(url);
                       }
                       return null;
