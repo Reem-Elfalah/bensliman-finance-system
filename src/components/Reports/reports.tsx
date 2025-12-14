@@ -1,14 +1,16 @@
 // src/Reports/ReportGenerator.tsx
-import React, { useRef, useState, useEffect, useMemo } from "react";
+import { useRef, useState, useEffect, useMemo } from "react";
 import { format } from "date-fns";
 import { Download, Printer, X, RefreshCcw, Filter } from "lucide-react";
 import { Button } from "../ui/Button";
-import jsPDF from "jspdf";
-import html2canvas from "html2canvas";
+import { useReactToPrint } from "react-to-print";
+import { PDFDownloadLink } from "@react-pdf/renderer";
 import DatePicker, { registerLocale } from "react-datepicker";
 import ar from "date-fns/locale/ar";
 import "react-datepicker/dist/react-datepicker.css";
 import { supabase } from "../../lib/supabase";
+import { PrintableReport } from "./PrintableReport";
+import { PDFReport } from "./PDFReport";
 
 // Patch Transaction type to allow Treasury property
 type TransactionWithTreasury = Transaction & {
@@ -29,10 +31,6 @@ export interface Transaction {
   paper_category: string;
   price: number;
   currency: string;
-  name?: string;
-  from_account?: string;
-  from_account_name?: string;
-  to_account?: string;
   to_account_name?: string;
   deliver_to?: string;
   notes?: string;
@@ -40,14 +38,9 @@ export interface Transaction {
   CustomerName?: string;
   fee?: number;
   fee_currency?: string;
-  beneficiary?: string;
-  fx_base_currency?: string;
-  fx_base_amount?: number;
-  fx_quote_currency?: string;
-  fx_quote_amount?: number;
   rate?: number;
-  fx_direction?: "BUY_FROM_CUSTOMER" | "SELL_TO_CUSTOMER";
   Treasury?: string;
+  fx_final_amount?: number;
 }
 
 interface ClientReportProps {
@@ -93,9 +86,9 @@ export function ReportGenerator({
   });
 
 
-  const reportRef = useRef<HTMLDivElement>(null);
+  const printRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
+  const filtersRef = useRef<HTMLDivElement>(null);
   const [fromDate, setFromDate] = useState<Date | null>(null);
   const [toDate, setToDate] = useState<Date | null>(null);
   const [selectedCurrency, setSelectedCurrency] = useState<string>("");
@@ -113,13 +106,24 @@ export function ReportGenerator({
   const [currencies, setCurrencies] = useState<Currency[]>([]);
   const [selectedTransactionType, setSelectedTransactionType] =
     useState<string>("");
+  const [shouldGeneratePDF, setShouldGeneratePDF] = useState(false);
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [isPdfLoading, setIsPdfLoading] = useState(false);
+  const hasTriggeredDownload = useRef(false);
+  
+  const resetPdfState = () => {
+    setShouldGeneratePDF(false);
+    setPdfUrl(null);
+    setIsPdfLoading(false);
+    hasTriggeredDownload.current = false;
+  };
 
 
   const transactionTypeOptions = [
     { value: "", label: "جميع أنواع المعاملات" },
     { value: "entry", label: "الإيداع / دخول" },
     { value: "exit", label: "السحب / خروج" },
-    { value: "buy", label: "شراء من" },
+    { value: "buy", label: "عمليات الشراء" },
     { value: "sell_to", label: "بيع الي" },
     { value: "transfer", label: "تحويل" },
   ];
@@ -190,6 +194,26 @@ export function ReportGenerator({
     return "";
   }, [selectedTransaction, allTransactions]);
 
+  // Auto-download when PDF URL is ready
+  useEffect(() => {
+    if (pdfUrl && !isPdfLoading && shouldGeneratePDF && reportClientName && !hasTriggeredDownload.current) {
+      hasTriggeredDownload.current = true;
+      const link = document.createElement("a");
+      link.href = pdfUrl;
+      link.download = `Statement_${reportClientName}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      // Reset after download
+      setTimeout(() => {
+        setShouldGeneratePDF(false);
+        setPdfUrl(null);
+        setIsPdfLoading(false);
+        hasTriggeredDownload.current = false;
+      }, 100);
+    }
+  }, [pdfUrl, isPdfLoading, shouldGeneratePDF, reportClientName]);
+
   const buyTransactions = clientTransactions.filter((t) => t.type === "buy");
   const sellTransactions = clientTransactions.filter(
     (t) => t.type === "sell_to"
@@ -246,7 +270,7 @@ export function ReportGenerator({
     };
   }, [clientTransactions]);
 
-  // حساب إجمالي العملات ومتوسط سعر الصرف لـ "شراء من" - مصحح
+  // حساب إجمالي العملات ومتوسط سعر الصرف لـ "عمليات الشراء" - مصحح
   const buyCurrencyData = useMemo(() => {
     const totals: Record<
       string,
@@ -284,7 +308,7 @@ export function ReportGenerator({
     return result;
   }, [buyTransactions]);
 
-  // حساب إجمالي العملات ومتوسط سعر الصرف لـ "بيع إلى" - مصحح
+  // حساب إجمالي العملات ومتوسط سعر الصرف لـ "عمليات البيع" - مصحح
   const sellCurrencyData = useMemo(() => {
     const totals: Record<
       string,
@@ -325,8 +349,8 @@ export function ReportGenerator({
   const typeLabelMap: Record<string, string> = {
     entry: "الإيداع / دخول",
     exit: "السحب / خروج",
-    buy: "شراء من",
-    sell_to: "بيع إلى",
+    buy: "عمليات الشراء",
+    sell_to: "عمليات البيع",
   };
 
   useEffect(() => {
@@ -352,7 +376,7 @@ export function ReportGenerator({
       if (error) {
         console.error("Error fetching accounts:", error);
       } else if (data) {
-        setAvailableAccounts(data.map((item) => item.name));
+        setAvailableAccounts(data.map((item: { name: string }) => item.name));
       }
     };
 
@@ -371,7 +395,7 @@ export function ReportGenerator({
       }
 
       const map: { [customer: string]: string } = {};
-      data?.forEach((row) => {
+      data?.forEach((row: { customer: string; account: string }) => {
         map[row.customer] = row.account;
       });
 
@@ -383,69 +407,32 @@ export function ReportGenerator({
 
   useEffect(() => {
     document.body.style.overflow = isOpen ? "hidden" : "auto";
-    if (isOpen && reportRef.current && containerRef.current) {
-      setTimeout(() => {
-        reportRef.current?.scrollIntoView({
-          behavior: "smooth",
-          block: "center",
-        });
-      }, 100);
+    if (!isOpen) {
+      setShouldGeneratePDF(false);
+      setPdfUrl(null);
+      setIsPdfLoading(false);
+      hasTriggeredDownload.current = false;
     }
     return () => {
       document.body.style.overflow = "auto";
     };
   }, [isOpen]);
-
-  const generatePDFBlob = async (): Promise<Blob | null> => {
-    if (!reportRef.current) return null;
-    try {
-      const canvas = await html2canvas(reportRef.current, {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: "#ffffff",
-      });
-      const pdf = new jsPDF({
-        orientation: "portrait",
-        unit: "mm",
-        format: "a4",
-      });
-      const imgData = canvas.toDataURL("image/png");
-      const imgWidth = 210;
-      const pageHeight = 297;
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
-      const yOffset = imgHeight < pageHeight ? (pageHeight - imgHeight) / 2 : 0;
-      pdf.addImage(imgData, "PNG", 0, yOffset, imgWidth, imgHeight);
-      return pdf.output("blob");
-    } catch (err) {
-      console.error(err);
-      return null;
+  
+  // Reset PDF state when client changes
+  useEffect(() => {
+    if (selectedTransaction?.CustomerName) {
+      setShouldGeneratePDF(false);
+      setPdfUrl(null);
+      setIsPdfLoading(false);
+      hasTriggeredDownload.current = false;
     }
-  };
+  }, [selectedTransaction?.CustomerName]);
 
-  const generatePDF = async () => {
-    setIsGenerating(true);
-    const blob = await generatePDFBlob();
-    if (!blob) {
-      alert("حدث خطأ أثناء إنشاء التقرير");
-      setIsGenerating(false);
-      return;
-    }
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-
-    const now = new Date();
-    const yearMonth = `${now.getFullYear()}-${String(
-      now.getMonth() + 1
-    ).padStart(2, "0")}`;
-    link.download = `Statement_${reportClientName}_${yearMonth}.pdf`;
-
-    link.href = url;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    setIsGenerating(false);
-  };
+  const handlePrint = useReactToPrint({
+    contentRef: printRef,
+    documentTitle: `Statement_${reportClientName}`,
+    pageStyle: `@page { size: A4; margin: 15mm; }`,
+  });
 
   const clearAllFilters = () => {
     setFromDate(null);
@@ -478,28 +465,78 @@ export function ReportGenerator({
           <div className="flex flex-wrap gap-2 justify-center sm:justify-start">
             <Button
               variant="primary"
-              icon={Download}
-              onClick={generatePDF}
-              loading={isGenerating}
-              size="sm"
-              className="text-xs sm:text-sm"
-            >
-              {isGenerating ? "جاري الإنشاء..." : "تحميل PDF"}
-            </Button>
-            <Button
-              variant="outline"
               icon={Printer}
-              onClick={() => reportRef.current && window.print()}
+              onClick={handlePrint}
               size="sm"
               className="text-xs sm:text-sm"
             >
               طباعة
             </Button>
+            {isOpen && selectedTransaction && (
+              shouldGeneratePDF ? (
+                <>
+                  <PDFDownloadLink
+                    key={(reportClientName || "") + "-" + (clientTransactions?.length || 0) + "-" + (isOpen ? "open" : "closed")}
+                    document={
+                      <PDFReport
+                        key={(reportClientName || "") + "-" + (clientTransactions?.length || 0)}
+                        data={clientTransactions}
+                        clientName={reportClientName}
+                        currencyTotals={currencyNetTotals}
+                        transactionCounts={transactionCounts}
+                        currencies={currencies}
+                        buyCurrencyData={buyCurrencyData}
+                        sellCurrencyData={sellCurrencyData}
+                        selectedTransactionType={selectedTransactionType}
+                      />
+                    }
+                    fileName={`Statement_${reportClientName}.pdf`}
+                    style={{ display: "none" }}
+                  >
+                    {/* @ts-ignore - PDFDownloadLink children function type mismatch */}
+                    {({ loading, url }: any) => {
+                      // Update state when URL becomes available
+                      setIsPdfLoading(loading);
+                      if (url) {
+                        setPdfUrl(url);
+                      }
+                      return null;
+                    }}
+                  </PDFDownloadLink>
+                  <Button
+                    variant="primary"
+                    icon={Download}
+                    size="sm"
+                    className="text-xs sm:text-sm"
+                    disabled={isPdfLoading}
+                    loading={isPdfLoading}
+                  >
+                    {isPdfLoading ? "جاري التحميل..." : "تحميل PDF"}
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  variant="primary"
+                  icon={Download}
+                  size="sm"
+                  className="text-xs sm:text-sm"
+                  onClick={() => {
+                    setShouldGeneratePDF(true);
+                    setIsPdfLoading(true);
+                  }}
+                >
+                  تحميل PDF
+                </Button>
+              )
+            )}
           </div>
           <Button
             variant="ghost"
             icon={X}
-            onClick={onClose}
+            onClick={() => {
+              resetPdfState();
+              onClose();
+            }}
             size="sm"
             className="hover:bg-red-50 hover:text-red-600 text-xs sm:text-sm"
           >
@@ -513,8 +550,9 @@ export function ReportGenerator({
           className="flex-1 overflow-y-auto p-2 sm:p-4 bg-gray-50"
         >
           <div className="w-full overflow-x-auto">
+            {/* Web Layout - Visible UI */}
+            <div className="block print:hidden">
             <div
-              ref={reportRef}
               className="bg-white shadow-lg w-full p-4 sm:p-6 font-sans text-[#212E5B] min-w-[300px]"
               style={{ fontFamily: "inherit" }}
             >
@@ -550,8 +588,8 @@ export function ReportGenerator({
                 </h2>
               </div>
 
-              {/* Filters Section */}
-              <div className="mb-6 p-3 sm:p-4 bg-gray-100 border border-gray-200 rounded-lg sm:rounded-xl shadow-sm">
+              {/* Filters Section - Not included in PDF */}
+              <div ref={filtersRef} className="mb-6 p-3 sm:p-4 bg-gray-100 border border-gray-200 rounded-lg sm:rounded-xl shadow-sm print:hidden">
                 <div className="flex items-center gap-2 mb-3">
                   <Filter className="w-4 h-4 text-[#212E5B]" />
                   <h3 className="text-[#212E5B] font-semibold text-sm sm:text-base">
@@ -722,7 +760,7 @@ export function ReportGenerator({
               {/* Transaction Counts */}
               <div className="mb-6 p-3 sm:p-4 bg-gray-100 border border-gray-200 rounded-lg sm:rounded-xl shadow-sm">
                 <h3 className="text-[#212E5B] font-semibold mb-2 text-right text-base sm:text-lg">
-                  عدد التحويلات والمعاملات
+                  ملخص المعاملات
                 </h3>
                 <div className="flex flex-wrap justify-between gap-2 mb-4">
                   <div className="flex-1 min-w-[100px] sm:min-w-[120px] bg-white p-2 rounded-lg shadow-sm flex flex-col items-center">
@@ -777,12 +815,12 @@ export function ReportGenerator({
                             <span className="text-base sm:text-lg font-bold text-[#212E5B]">
                               {currencyFromTable.name}
                             </span>
-                            <div
+                            {/* <div
                               className={`px-2 sm:px-3 py-1 rounded-full text-xs sm:text-sm font-medium ${isPositive ? "bg-[#e6e8ef] text-[#212E5B]" : "bg-red-100 text-red-800"
                                 }`}
                             >
                               {isPositive ? "صافي موجب" : "صافي سالب"}
-                            </div>
+                            </div> */}
                           </div>
 
                           {/* Deposit Amount */}
@@ -802,7 +840,7 @@ export function ReportGenerator({
                           </div>
 
                           {/* Net Total */}
-                          <div className="flex justify-between items-center mt-3 pt-2 border-t border-gray-200">
+                          {/* <div className="flex justify-between items-center mt-3 pt-2 border-t border-gray-200">
                             <span className="text-gray-700 font-medium text-sm">الصافي:</span>
                             <span
                               className={`text-base sm:text-lg font-bold ${isPositive ? "text-green-600" : "text-red-600"
@@ -811,7 +849,7 @@ export function ReportGenerator({
                               {isPositive ? "+" : ""}
                               {netTotal.toLocaleString()}
                             </span>
-                          </div>
+                          </div> */}
                         </div>
                       );
                     })}
@@ -1060,7 +1098,7 @@ export function ReportGenerator({
                       )}
 
                       <h3 className="text-[#212E5B] font-bold mb-3 text-right text-base sm:text-lg">
-                        شراء من
+                        عمليات الشراء
                       </h3>
                       <div className="overflow-x-auto">
                         <table
@@ -1219,7 +1257,7 @@ export function ReportGenerator({
                       )}
 
                       <h3 className="text-[#212E5B] font-bold mb-3 text-right text-base sm:text-lg">
-                        بيع إلى
+                        عمليات البيع
                       </h3>
                       <div className="overflow-x-auto">
                         <table
@@ -1314,7 +1352,23 @@ export function ReportGenerator({
                   );
                 })()}
               </div>
+            </div>
+            </div>
+            {/* End of Web Layout */}
 
+            {/* Printable Component - Hidden on screen, used for ReactToPrint */}
+            <div className="hidden">
+              <PrintableReport
+                ref={printRef}
+                data={clientTransactions}
+                clientName={reportClientName}
+                currencyTotals={currencyNetTotals}
+                transactionCounts={transactionCounts}
+                currencies={currencies}
+                buyCurrencyData={buyCurrencyData}
+                sellCurrencyData={sellCurrencyData}
+                selectedTransactionType={selectedTransactionType}
+              />
             </div>
           </div>
         </div>

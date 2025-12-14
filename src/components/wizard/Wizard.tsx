@@ -54,6 +54,7 @@ export interface WizardFormData {
   treasuryCategory?: { id: string; name: string };
   customerAccount?: { name: string; account: string; currency: string; };
   currency_final?: string;
+  conversion_method?: "MULTIPLY" | "DIVIDE";
 }
 
 export interface TransactionInsert {
@@ -90,6 +91,7 @@ export interface TransactionInsert {
   custom_account?: string;
   customer_id?: number | null;
   currency_final?: string;
+  conversion_method?: "MULTIPLY" | "DIVIDE";
 }
 export interface TransactionFXInsert {
   transaction_id?: string;
@@ -132,6 +134,7 @@ interface SearchableDropdownOption {
 interface Currency {
   id: number;
   name: string;
+  default_conversion_method?: "MULTIPLY" | "DIVIDE";
 }
 
 interface SearchableDropdownProps {
@@ -497,6 +500,7 @@ export function Wizard({
     paper_category: "غير محدد",
     Treasury: "",
     customAccount: "",
+    conversion_method: "MULTIPLY",
   });
 
   useEffect(() => {
@@ -549,6 +553,12 @@ export function Wizard({
     fetchCustomerAccounts();
   }, []);
 
+  // Helper function to get conversion method from currency name
+  const getConversionMethodFromCurrency = (currencyName: string): "MULTIPLY" | "DIVIDE" => {
+    const currency = currencies.find(c => c.name === currencyName);
+    return currency?.default_conversion_method || "MULTIPLY";
+  };
+
 
   // Handle custom account input
   const handleCustomAccountInput = (value: string) => {
@@ -574,10 +584,10 @@ export function Wizard({
   };
 
   const amount =
-    formData.price && formData.rate && formData.currency
-      ? formData.currency.trim() === "رممبي" 
-        ? parseFloat(String(formData.price)) / parseFloat(String(formData.rate)) // divide
-        : parseFloat(String(formData.price)) * parseFloat(String(formData.rate)) // multiply
+    formData.price && formData.rate && formData.conversion_method
+      ? formData.conversion_method === "DIVIDE"
+        ? parseFloat(String(formData.price)) / parseFloat(String(formData.rate))
+        : parseFloat(String(formData.price)) * parseFloat(String(formData.rate))
       : "";
 
 
@@ -809,18 +819,28 @@ export function Wizard({
   useEffect(() => {
     const fetchCurrencies = async () => {
       const { data, error } = await supabase
-        .from<Currency>("currencies")
-        .select("id, name")
+        .from("currencies")
+        .select("id, name, default_conversion_method")
         .order("name", { ascending: true });
 
       if (error) {
         console.error("Error fetching currencies:", error);
       } else if (data) {
-        setCurrencies(data);
+        const currenciesData = data as Currency[];
+        setCurrencies(currenciesData);
 
         //  set default  "الدينار الليبي" 
-        const defaultCurrency = data.find(c => c.name === "دينار ليبي");
-        if (defaultCurrency) setSelectedCurrency(defaultCurrency.name);
+        const defaultCurrency = currenciesData.find(c => c.name === "دينار ليبي");
+        if (defaultCurrency) {
+          setSelectedCurrency(defaultCurrency.name);
+          // Set default conversion method if available
+          if (defaultCurrency.default_conversion_method) {
+            setFormData(prev => ({
+              ...prev,
+              conversion_method: defaultCurrency.default_conversion_method,
+            }));
+          }
+        }
       }
     };
 
@@ -889,7 +909,7 @@ export function Wizard({
       currency: formData.currency,
       customerAccount: formData.customerAccount ?? null,
       currency_final: selectedCurrency,
-
+      conversion_method: formData.conversion_method || "MULTIPLY",
     };
 
     console.log("FINAL transactionData to submit:", JSON.stringify(transactionData, null, 2));
@@ -991,21 +1011,26 @@ export function Wizard({
               );
               console.log("Matched account:", matchedAccount);
 
+              const selectedCurrency = matchedAccount ? matchedAccount.currency : currencyName;
+              const conversionMethod = getConversionMethodFromCurrency(selectedCurrency);
+
               setFormData(prev => ({
                 ...prev,
                 customer_id: matchedAccount ? matchedAccount.id : null,
                 customerAccount: matchedAccount
                   ? { name: matchedAccount.customer, account: matchedAccount.account, currency: matchedAccount.currency }
                   : { name: customerName, account: accountName, currency: currencyName },
-                currency: matchedAccount ? matchedAccount.currency : currencyName,
+                currency: selectedCurrency,
                 CustomerName: matchedAccount ? matchedAccount.customer : customerName,
                 country_city: matchedAccount?.account || accountName,
+                conversion_method: conversionMethod,
               }));
               console.log("FormData after set:", {
                 customer_id: matchedAccount ? matchedAccount.id : null,
                 customerAccount: matchedAccount
                   ? { name: matchedAccount.customer, account: matchedAccount.account, currency: matchedAccount.currency }
                   : { name: customerName, account: accountName, currency: currencyName },
+                conversion_method: conversionMethod,
               });
             }}
             label="الحساب"
@@ -1041,6 +1066,8 @@ export function Wizard({
               console.log("Matched account:", matchedAccount);
 
               const selectedAccount = accounts.find(acc => acc.name === selected.name);
+              const selectedCurrency = matchedAccount ? matchedAccount.currency : currencyName;
+              const conversionMethod = getConversionMethodFromCurrency(selectedCurrency);
 
               setFormData(prev => ({
                 ...prev,
@@ -1048,9 +1075,10 @@ export function Wizard({
                 customerAccount: matchedAccount
                   ? { name: matchedAccount.customer, account: matchedAccount.account, currency: matchedAccount.currency }
                   : { name: customerName, account: accountName, currency: currencyName },
-                currency: matchedAccount ? matchedAccount.currency : currencyName,
+                currency: selectedCurrency,
                 CustomerName: matchedAccount ? matchedAccount.customer : customerName,
                 country_city: matchedAccount?.account || accountName,
+                conversion_method: conversionMethod,
               }));
 
               console.log("FormData after set:", {
@@ -1058,6 +1086,7 @@ export function Wizard({
                 customerAccount: matchedAccount
                   ? { name: matchedAccount.customer, account: matchedAccount.account, currency: matchedAccount.currency }
                   : { name: customerName, account: accountName, currency: currencyName },
+                conversion_method: conversionMethod,
               });
             }}
             label="الحساب"
@@ -1104,6 +1133,8 @@ export function Wizard({
                 console.log("Matched account:", matchedAccount);
 
                 const selectedAccount = accounts.find(acc => acc.name === selected.name);
+                const selectedCurrency = selectedAccount?.currency || (matchedAccount ? matchedAccount.currency : currencyName);
+                const conversionMethod = getConversionMethodFromCurrency(selectedCurrency);
 
                 setFormData(prev => ({
                   ...prev,
@@ -1112,13 +1143,14 @@ export function Wizard({
                   toAccountName: selectedAccount?.name || customerName,
                   toAccountObject: selectedAccount,
                   customAccount: selectedAccount ? "" : accountName,
-                  currency: selectedAccount?.currency || currencyName,
+                  currency: selectedCurrency,
                   CustomerName: selectedAccount ? selectedAccount.name : customerName,
                   country_city: selectedAccount?.account || accountName,
                   // Added customerAccount for consistency
                   customerAccount: matchedAccount
                     ? { name: matchedAccount.customer, account: matchedAccount.account, currency: matchedAccount.currency }
                     : { name: customerName, account: accountName, currency: currencyName },
+                  conversion_method: conversionMethod,
                 }));
 
                 setCustomAccountName(selectedAccount ? "" : accountName);
@@ -1128,12 +1160,13 @@ export function Wizard({
                   customer_id: matchedAccount ? matchedAccount.id : null,
                   toAccount: selectedAccount?.id || "",
                   toAccountName: selectedAccount?.name || customerName,
-                  currency: selectedAccount?.currency || currencyName,
+                  currency: selectedCurrency,
                   CustomerName: selectedAccount ? selectedAccount.name : customerName,
                   country_city: selectedAccount?.account || accountName,
                   customerAccount: matchedAccount
                     ? { name: matchedAccount.customer, account: matchedAccount.account, currency: matchedAccount.currency }
                     : { name: customerName, account: accountName, currency: currencyName },
+                  conversion_method: conversionMethod,
                 });
               }}
               label="الحساب"
@@ -1233,21 +1266,43 @@ export function Wizard({
             )}
           </div>
 
-          {/* Rate input */}
-          <div>
-            <input
-              type="number"
-              name="rate"
-              placeholder="سعر الصرف"
-              value={formData.rate || ""}
-              onChange={handleChange}
-              className={inputClassName}
-            />
-            {errors.rate && (
-              <p className="text-red-500 text-sm mt-1 text-right">
-                {errors.rate}
-              </p>
-            )}
+          {/* Rate input and Conversion Method side by side */}
+          <div className="flex gap-2">
+            {/* Rate input */}
+            <div className="flex-1">
+              <input
+                type="number"
+                name="rate"
+                placeholder="سعر الصرف"
+                value={formData.rate || ""}
+                onChange={handleChange}
+                className={inputClassName}
+              />
+              {errors.rate && (
+                <p className="text-red-500 text-sm mt-1 text-right">
+                  {errors.rate}
+                </p>
+              )}
+            </div>
+
+            {/* Conversion Method dropdown */}
+            <div className="flex-1">
+              {/* <label className={labelClassName}>طريقة التحويل</label> */}
+              <select
+                name="conversion_method"
+                value={formData.conversion_method || "MULTIPLY"}
+                onChange={(e) =>
+                  setFormData((prev) => ({
+                    ...prev,
+                    conversion_method: e.target.value as "MULTIPLY" | "DIVIDE",
+                  }))
+                }
+                className={inputClassName}
+              >
+                <option value="MULTIPLY">ضرب</option>
+                <option value="DIVIDE">قسمة</option>
+              </select>
+            </div>
           </div>
 
           {/* Calculated Amount */}
@@ -1267,7 +1322,12 @@ export function Wizard({
             {/* Currency dropdown */}
             <select
               value={selectedCurrency}
-              onChange={(e) => setSelectedCurrency(e.target.value)}
+              onChange={(e) => {
+                const selectedCurrencyName = e.target.value;
+                setSelectedCurrency(selectedCurrencyName);
+                // Don't change conversion_method here - it should only change when customer_id changes
+                // conversion_method depends on the origin currency (from customer), not the final currency
+              }}
               className="px-4 py-3 border border-gray-300 rounded-xl bg-white text-gray-600 text-sm"
             >
               {currencies

@@ -6,7 +6,7 @@ node_modules/
 .pnp.js
 .env.local
 bsgroup-wizard/
-
+.env
 # testing
 /coverage
 

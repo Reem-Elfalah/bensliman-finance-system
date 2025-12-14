@@ -160,48 +160,20 @@ export function InvoiceGenerator({
 
 
 
-  // Smart positioning when modal opens
+  // Handle body scroll lock when modal opens
   useEffect(() => {
-    if (isOpen && modalRef.current) {
-      scrollPositionRef.current = window.scrollY;
-
-      const timer = setTimeout(() => {
-        if (modalRef.current) {
-          const modalRect = modalRef.current.getBoundingClientRect();
-          const viewportHeight = window.innerHeight;
-
-          if (modalRect.top < 0 || modalRect.bottom > viewportHeight) {
-            const currentScrollY = window.scrollY;
-            const modalTop = modalRect.top + currentScrollY;
-            let targetScrollY;
-
-            if (modalRect.height >= viewportHeight * 0.9) {
-              targetScrollY = modalTop - 20;
-            } else {
-              targetScrollY =
-                modalTop - (viewportHeight - modalRect.height) / 2;
-            }
-
-            targetScrollY = Math.max(0, targetScrollY);
-            window.scrollTo({ top: targetScrollY, behavior: "smooth" });
-          }
-        }
-      }, 100);
-
+    if (isOpen) {
+      // Simply prevent body scroll without affecting positioning
+      const originalOverflow = document.body.style.overflow;
       document.body.style.overflow = "hidden";
+      
       return () => {
-        clearTimeout(timer);
-        document.body.style.overflow = "unset";
+        document.body.style.overflow = originalOverflow;
       };
-    } else {
-      document.body.style.overflow = "unset";
     }
   }, [isOpen]);
 
   const handleClose = () => {
-    setTimeout(() => {
-      window.scrollTo(0, scrollPositionRef.current);
-    }, 100);
     onClose();
   };
 
@@ -325,30 +297,109 @@ export function InvoiceGenerator({
     editedTransaction.notes.trim() !== "" &&
     editedTransaction.notes.trim().toLowerCase() !== "optional";
 
+  // Helper function to load logo image
+  const loadLogoImage = (): Promise<string | null> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.drawImage(img, 0, 0);
+          resolve(canvas.toDataURL("image/png"));
+        } else {
+          resolve(null);
+        }
+      };
+      img.onerror = () => resolve(null);
+      img.src = "/applogo.png";
+    });
+  };
+
+  // Helper function to add header and footer to PDF
+  const addHeaderFooter = (pdf: jsPDF, pageNum: number, totalPages: number, logoData: string | null) => {
+    // Header line removed as requested
+    // Footer line removed as requested
+    // Logo removed as requested
+    // No header/footer content needed
+  };
+
   // Rest of your functions (generatePDF, handlePrint, etc.) remain the same...
   const generatePDFBlob = async (): Promise<Blob | null> => {
     if (!invoiceRef.current) return null;
     await document.fonts.ready;
     try {
+      // Get the actual width of the invoice content (794px)
+      const invoiceWidth = 794; // Fixed width in pixels
+      const invoiceElement = invoiceRef.current;
+      
+      // Temporarily set explicit width to prevent mobile scaling
+      const originalWidth = invoiceElement.style.width;
+      const originalMaxWidth = invoiceElement.style.maxWidth;
+      invoiceElement.style.width = `${invoiceWidth}px`;
+      invoiceElement.style.maxWidth = `${invoiceWidth}px`;
+      
       const canvas = await html2canvas(invoiceRef.current, {
-        scale: 2,
+        scale: 4.5, // Increased scale for more zoom
         useCORS: true,
         allowTaint: false,
         backgroundColor: "#ffffff",
         imageTimeout: 15000,
+        logging: false,
+        width: invoiceWidth,
+        windowWidth: invoiceWidth,
+        windowHeight: invoiceElement.scrollHeight,
       });
+      
+      // Restore original styles
+      invoiceElement.style.width = originalWidth;
+      invoiceElement.style.maxWidth = originalMaxWidth;
 
-      const imgData = canvas.toDataURL("image/png", 1.0);
-      const imgWidth = 210;
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      // Load logo
+      const logoData = await loadLogoImage();
+
+      // Use JPEG for smaller file size (quality 0.92 provides good balance)
+      const imgData = canvas.toDataURL("image/jpeg", 0.92);
+      
+      // Convert pixels to mm (1 inch = 25.4mm, 96 DPI = 96 pixels per inch)
+      // 794px at 96 DPI = 794/96 * 25.4 = 210mm (A4 width)
+      const pageWidthMM = 210; // A4 width in mm
+      const pixelsPerMM = canvas.width / pageWidthMM;
+      const pageHeightMM = canvas.height / pixelsPerMM;
 
       const pdf = new jsPDF({
         orientation: "portrait",
         unit: "mm",
-        format: [imgWidth, imgHeight],
+        format: [pageWidthMM, pageHeightMM],
       });
 
-      pdf.addImage(imgData, "PNG", 0, 0, imgWidth, imgHeight);
+      // Define margins and content area (reduced margins for zoomed effect)
+      const margin = 2; // mm - reduced further for more zoom
+      const headerHeight = 0; // No header line
+      const contentWidth = pageWidthMM - (margin * 2);
+      const contentHeight = pageHeightMM - (margin * 2);
+      
+      // Calculate image dimensions to fit the content area while maintaining aspect ratio
+      const imgAspectRatio = canvas.width / canvas.height;
+      let imgWidth = contentWidth;
+      let imgHeight = imgWidth / imgAspectRatio;
+      
+      // If image height exceeds content height, scale down
+      if (imgHeight > contentHeight) {
+        imgHeight = contentHeight;
+        imgWidth = imgHeight * imgAspectRatio;
+      }
+
+      // Add header (logo and footer removed)
+      addHeaderFooter(pdf, 1, 1, logoData);
+
+      // Add content with margins (centered if needed)
+      const imgX = margin + (contentWidth - imgWidth) / 2;
+      pdf.addImage(imgData, "JPEG", imgX, margin, imgWidth, imgHeight);
+      
       return pdf.output("blob");
     } catch (error) {
       console.error("Error generating PDF blob:", error);
@@ -389,21 +440,35 @@ export function InvoiceGenerator({
     }
   };
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
     if (!invoiceRef.current) return;
-
-    const printContent = invoiceRef.current.innerHTML;
-    const originalContent = document.body.innerHTML;
-
-    document.body.innerHTML = `
-      <div style="direction: rtl; font-family: Arial, sans-serif;">
-        ${printContent}
-      </div>
-    `;
-
-    window.print();
-    document.body.innerHTML = originalContent;
-    window.location.reload();
+    setIsGenerating(true);
+    try {
+      const pdfBlob = await generatePDFBlob();
+      if (!pdfBlob) {
+        alert("حدث خطأ أثناء إنشاء ملف PDF للطباعة");
+        setIsGenerating(false);
+        return;
+      }
+      const url = URL.createObjectURL(pdfBlob);
+      const printWindow = window.open(url, "_blank");
+      if (printWindow) {
+        printWindow.onload = () => {
+          printWindow.print();
+          setTimeout(() => {
+            URL.revokeObjectURL(url);
+          }, 1000);
+        };
+      } else {
+        alert("يرجى السماح بالنوافذ المنبثقة للطباعة");
+        URL.revokeObjectURL(url);
+      }
+    } catch (error) {
+      console.error("Error printing:", error);
+      alert("حدث خطأ أثناء الطباعة");
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   const handleShare = () => {
@@ -589,7 +654,10 @@ export function InvoiceGenerator({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-">
+    <div 
+      className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
       {/* Share Options Modal */}
       {showShareOptions && (
         <div
@@ -646,7 +714,8 @@ export function InvoiceGenerator({
 
       <div
         ref={modalRef}
-        className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[95vh] overflow-hidden flex flex-col mx-2"
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
       >
         {/* Action Buttons */}
         <div className="sticky top-0 bg-white/98 backdrop-blur-sm border-b border-gray-200 p-3 sm:p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 sm:gap-0 z-20 shadow-sm">
@@ -733,23 +802,33 @@ export function InvoiceGenerator({
         </div>
 
         {/* Invoice Content */}
-        <div className="flex-1 overflow-y-auto bg-gray-50 p-4">
-          <div className="flex justify-center">
-            <div className="w-full max-w-none overflow-x-auto">
-              <div className="flex justify-center min-w-[794px]">
-                <div
-                  ref={invoiceRef}
-                  className="bg-white shadow-lg"
-                  style={{
-                    width: "100%",
-                    maxWidth: "794px",
-                    minHeight: "800px",
-                    margin: "0 auto",
-                    padding: "0",
-                    fontFamily: "'Tajawal', sans-serif",
-                    flexShrink: 0,
-                  }}
-                >
+        <div 
+          className="overflow-y-auto bg-gray-50 p-4 max-h-[85vh]"
+          style={{
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "flex-start",
+            width: "100%",
+          }}
+        >
+          <div
+            ref={invoiceRef}
+            className="bg-white shadow-lg"
+            style={{
+              width: "794px",
+              maxWidth: "794px",
+              minWidth: "794px",
+              minHeight: "800px",
+              margin: "0 auto",
+              padding: "0",
+              fontFamily: "'Tajawal', sans-serif",
+              boxSizing: "border-box",
+              transform: "scale(1)",
+              zoom: "1",
+              WebkitTextSizeAdjust: "100%",
+              textSizeAdjust: "100%",
+            }}
+          >
                   {/* Header */}
                   <div className="relative overflow-hidden">
                     <div
@@ -1147,17 +1226,8 @@ export function InvoiceGenerator({
                       }}
                     ></div>
                   </div>
-                </div>
-              </div>
-            </div>
           </div>
         </div>
-
-
-
-
-
-
       </div>
     </div>
   );

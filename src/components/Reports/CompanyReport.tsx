@@ -1,14 +1,16 @@
-import React, { useRef, useState, useEffect, useMemo } from "react";
+import { useRef, useState, useEffect, useMemo } from "react";
 import { format } from "date-fns";
-import { Download, Printer, X, RefreshCcw, Filter } from "lucide-react";
+import { X, RefreshCcw, Filter, Printer } from "lucide-react";
 import { Button } from "../ui/Button";
-import jsPDF from "jspdf";
-import html2canvas from "html2canvas";
+import { useReactToPrint } from "react-to-print";
+import { PDFDownloadLink } from "@react-pdf/renderer";
 import DatePicker, { registerLocale } from "react-datepicker";
 import ar from "date-fns/locale/ar";
 import "react-datepicker/dist/react-datepicker.css";
 import { Transaction } from "./reports";
 import { supabase } from "../../lib/supabase";
+import { PrintableCompanyReport } from "./PrintableCompanyReport";
+import { PDFCompanyReport } from "./PDFCompanyReport";
 
 // Patch Transaction type to allow Treasury property
 type TransactionWithTreasury = Transaction & {
@@ -60,9 +62,9 @@ export function CompanyReport({
   });
 
 
-  const reportRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
+  const filtersRef = useRef<HTMLDivElement>(null);
+  const printRef = useRef<HTMLDivElement>(null);
   const [fromDate, setFromDate] = useState<Date | null>(null);
   const [toDate, setToDate] = useState<Date | null>(null);
   const [selectedCurrency, setSelectedCurrency] = useState<string>("");
@@ -84,14 +86,44 @@ export function CompanyReport({
   const [customers, setCustomers] = useState<CustomerAccount[]>([]);
 
   const [availableAccounts, setAvailableAccounts] = useState<string[]>([]);
-
+  const [shouldGeneratePDF, setShouldGeneratePDF] = useState(false);
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [isPdfLoading, setIsPdfLoading] = useState(false);
+  const hasTriggeredDownload = useRef(false);
+  
+  const resetPdfState = () => {
+    setShouldGeneratePDF(false);
+    setPdfUrl(null);
+    setIsPdfLoading(false);
+    hasTriggeredDownload.current = false;
+  };
+  
+  // Auto-download when PDF URL is ready
+  useEffect(() => {
+    if (pdfUrl && !isPdfLoading && shouldGeneratePDF && !hasTriggeredDownload.current) {
+      hasTriggeredDownload.current = true;
+      const link = document.createElement("a");
+      link.href = pdfUrl;
+      link.download = "CompanyReport.pdf";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      // Reset after download
+      setTimeout(() => {
+        setShouldGeneratePDF(false);
+        setPdfUrl(null);
+        setIsPdfLoading(false);
+        hasTriggeredDownload.current = false;
+      }, 100);
+    }
+  }, [pdfUrl, isPdfLoading, shouldGeneratePDF]);
 
   // Transaction type options
   const transactionTypeOptions = [
     { value: "", label: "جميع أنواع المعاملات" },
     { value: "entry", label: "الإيداع / دخول" },
     { value: "exit", label: "السحب / خروج" },
-    { value: "buy", label: "شراء من" },
+    { value: "buy", label: "عمليات الشراء" },
     { value: "sell_to", label: "بيع الي" },
     { value: "transfer", label: "تحويل" },
   ];
@@ -210,7 +242,7 @@ export function CompanyReport({
     };
   }, [filteredTransactions]);
 
-  // حساب إجمالي العملات ومتوسط سعر الصرف لـ "شراء من" - مصحح
+  // حساب إجمالي العملات ومتوسط سعر الصرف لـ "عمليات الشراء" - مصحح
   const buyCurrencyData = useMemo(() => {
     const totals: Record<
       string,
@@ -251,7 +283,7 @@ export function CompanyReport({
     return result;
   }, [filteredTransactions]);
 
-  // حساب إجمالي العملات ومتوسط سعر الصرف لـ "بيع إلى" - مصحح
+  // حساب إجمالي العملات ومتوسط سعر الصرف لـ "عمليات البيع" - مصحح
   const sellCurrencyData = useMemo(() => {
     const totals: Record<
       string,
@@ -295,8 +327,8 @@ export function CompanyReport({
   const typeLabelMap: Record<string, string> = {
     entry: "الإيداع / دخول",
     exit: "السحب / خروج",
-    buy: "شراء من",
-    sell_to: "بيع إلى",
+    buy: "عمليات الشراء",
+    sell_to: "عمليات البيع",
   };
 
   useEffect(() => {
@@ -371,67 +403,30 @@ export function CompanyReport({
 
   useEffect(() => {
     document.body.style.overflow = isOpen ? "hidden" : "auto";
-    if (isOpen && reportRef.current && containerRef.current) {
-      setTimeout(() => {
-        reportRef.current?.scrollIntoView({
-          behavior: "smooth",
-          block: "center",
-        });
-      }, 100);
+    if (!isOpen) {
+      setShouldGeneratePDF(false);
+      setPdfUrl(null);
+      setIsPdfLoading(false);
+      hasTriggeredDownload.current = false;
     }
     return () => {
       document.body.style.overflow = "auto";
     };
   }, [isOpen]);
+  
+  // Reset PDF state when data changes (filters, transactions, etc.)
+  useEffect(() => {
+    setShouldGeneratePDF(false);
+    setPdfUrl(null);
+    setIsPdfLoading(false);
+    hasTriggeredDownload.current = false;
+  }, [filteredTransactions.length, fromDate, toDate, selectedTransactionType]);
 
-  const generatePDFBlob = async (): Promise<Blob | null> => {
-    if (!reportRef.current) return null;
-    try {
-      const canvas = await html2canvas(reportRef.current, {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: "#ffffff",
-      });
-      const pdf = new jsPDF({
-        orientation: "portrait",
-        unit: "mm",
-        format: "a4",
-      });
-      const imgData = canvas.toDataURL("image/png");
-      const imgWidth = 210;
-      const pageHeight = 297;
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
-      const yOffset = imgHeight < pageHeight ? (pageHeight - imgHeight) / 2 : 0;
-      pdf.addImage(imgData, "PNG", 0, yOffset, imgWidth, imgHeight);
-      return pdf.output("blob");
-    } catch (err) {
-      console.error(err);
-      return null;
-    }
-  };
 
-  const generatePDF = async () => {
-    setIsGenerating(true);
-    const blob = await generatePDFBlob();
-    if (!blob) {
-      alert("حدث خطأ أثناء إنشاء التقرير");
-      setIsGenerating(false);
-      return;
-    }
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    const now = new Date();
-    const yearMonth = `${now.getFullYear()}-${String(
-      now.getMonth() + 1
-    ).padStart(2, "0")}`;
-    link.download = `CompanyReport_${yearMonth}.pdf`;
-    link.href = url;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    setIsGenerating(false);
-  };
+  const handlePrint = useReactToPrint({
+    contentRef: printRef,
+    documentTitle: "CompanyReport",
+  });
 
   const clearAllFilters = () => {
     setFromDate(null);
@@ -471,28 +466,74 @@ export function CompanyReport({
           <div className="flex flex-wrap gap-2 justify-center sm:justify-start">
             <Button
               variant="primary"
-              icon={Download}
-              onClick={generatePDF}
-              loading={isGenerating}
-              size="sm"
-              className="text-xs sm:text-sm"
-            >
-              {isGenerating ? "جاري الإنشاء..." : "تحميل PDF"}
-            </Button>
-            <Button
-              variant="outline"
               icon={Printer}
-              onClick={() => reportRef.current && window.print()}
               size="sm"
               className="text-xs sm:text-sm"
+              onClick={handlePrint}
             >
               طباعة
             </Button>
+            {shouldGeneratePDF ? (
+              <>
+                <PDFDownloadLink
+                  key={"CompanyReport" + "-" + (filteredTransactions?.length || 0) + "-" + (isOpen ? "open" : "closed")}
+                  document={
+                    <PDFCompanyReport
+                      key={"CompanyReport" + "-" + (filteredTransactions?.length || 0)}
+                      data={filteredTransactions}
+                      currencyTotals={currencyNetTotals}
+                      transactionCounts={transactionCounts}
+                      dateRange={{ fromDate, toDate }}
+                      currencies={currencies}
+                      buyCurrencyData={buyCurrencyData}
+                      sellCurrencyData={sellCurrencyData}
+                      selectedTransactionType={selectedTransactionType}
+                    />
+                  }
+                  fileName="CompanyReport.pdf"
+                  style={{ display: "none" }}
+                >
+                  {/* @ts-ignore - PDFDownloadLink children function type mismatch */}
+                  {({ loading, url }: any) => {
+                    // Update state when URL becomes available
+                    setIsPdfLoading(loading);
+                    if (url) {
+                      setPdfUrl(url);
+                    }
+                    return null;
+                  }}
+                </PDFDownloadLink>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  className="text-xs sm:text-sm"
+                  disabled={isPdfLoading}
+                  loading={isPdfLoading}
+                >
+                  {isPdfLoading ? "جاري التحميل..." : "تحميل PDF"}
+                </Button>
+              </>
+            ) : (
+              <Button
+                variant="primary"
+                size="sm"
+                className="text-xs sm:text-sm"
+                onClick={() => {
+                  setShouldGeneratePDF(true);
+                  setIsPdfLoading(true);
+                }}
+              >
+                تحميل PDF
+              </Button>
+            )}
           </div>
           <Button
             variant="ghost"
             icon={X}
-            onClick={onClose}
+            onClick={() => {
+              resetPdfState();
+              onClose();
+            }}
             size="sm"
             className="hover:bg-red-50 hover:text-red-600 text-xs sm:text-sm"
           >
@@ -506,11 +547,12 @@ export function CompanyReport({
           className="flex-1 overflow-y-auto p-2 sm:p-4 bg-gray-50"
         >
           <div className="w-full overflow-x-auto">
-            <div
-              ref={reportRef}
-              className="bg-white shadow-lg w-full p-4 sm:p-6 font-sans text-[#212E5B] min-w-[300px]"
-              style={{ fontFamily: "inherit" }}
-            >
+            {/* Web Layout - Visible UI */}
+            <div className="block print:hidden">
+              <div
+                className="bg-white shadow-lg w-full p-4 sm:p-6 font-sans text-[#212E5B] min-w-[300px]"
+                style={{ fontFamily: "inherit" }}
+              >
               {/* Logo + Title */}
               <div className="flex flex-col items-center mb-4">
                 <div className="w-24 h-24 sm:w-32 sm:h-32 mb-3">
@@ -542,8 +584,8 @@ export function CompanyReport({
                 </h2>
               </div>
 
-              {/* Filters Section */}
-              <div className="mb-6 p-3 sm:p-4 bg-gray-100 border border-gray-200 rounded-lg sm:rounded-xl shadow-sm">
+              {/* Filters Section - Not included in PDF */}
+              <div ref={filtersRef} className="mb-6 p-3 sm:p-4 bg-gray-100 border border-gray-200 rounded-lg sm:rounded-xl shadow-sm print:hidden">
                 <div className="flex items-center gap-2 mb-3">
                   <Filter className="w-4 h-4 text-[#212E5B]" />
                   <h3 className="text-[#212E5B] font-semibold text-sm sm:text-base">
@@ -741,10 +783,11 @@ export function CompanyReport({
                   )}
               </div>
 
+
               {/* Transaction Counts */}
               <div className="mb-6 p-3 sm:p-4 bg-gray-100 border border-gray-200 rounded-lg sm:rounded-xl shadow-sm">
                 <h3 className="text-[#212E5B] font-semibold mb-2 text-right text-base sm:text-lg">
-                  عدد التحويلات والمعاملات
+                  ملخص المعاملات
                 </h3>
                 <div className="flex flex-wrap justify-between gap-2 mb-4">
                   <div className="flex-1 min-w-[100px] sm:min-w-[120px] bg-white p-2 rounded-lg shadow-sm flex flex-col items-center">
@@ -795,14 +838,14 @@ export function CompanyReport({
                           <span className="text-base sm:text-lg font-bold text-[#212E5B]">
                             {currency}
                           </span>
-                          <div
+                          {/* <div
                             className={`px-2 sm:px-3 py-1 rounded-full text-xs sm:text-sm font-medium ${isPositive
                               ? "bg-[#e6e8ef] text-[#212E5B]"
                               : "bg-red-100 text-red-800"
                               }`}
                           >
                             {isPositive ? "صافي موجب" : "صافي سالب"}
-                          </div>
+                          </div> */}
                         </div>
 
                         <div className="flex justify-between items-center mb-2">
@@ -823,7 +866,7 @@ export function CompanyReport({
                           </span>
                         </div>
 
-                        <div className="flex justify-between items-center mt-3 pt-2 border-t border-gray-200">
+                        {/* <div className="flex justify-between items-center mt-3 pt-2 border-t border-gray-200">
                           <span className="text-gray-700 font-medium text-sm">
                             الصافي:
                           </span>
@@ -834,7 +877,7 @@ export function CompanyReport({
                             {isPositive ? "+" : ""}
                             {netTotal.toLocaleString()}
                           </span>
-                        </div>
+                        </div> */}
                       </div>
                     );
                   })}
@@ -869,22 +912,22 @@ export function CompanyReport({
                                 <th className="border p-2 sm:p-3 text-right">
                                   التاريخ
                                 </th>
-                                <th className="border p-2 sm:p-3 text-right">
+                                <th className="border p-2 sm:p-3 text-right text-white">
                                   العميل
                                 </th>
-                                <th className="border p-2 sm:p-3 text-right">
-                                  الحساب                                </th>
-                                <th className="border p-2 sm:p-3 text-right">
+                                <th className="border p-2 sm:p-3 text-right text-white">
+                                  الحساب
+                                </th>
+                                <th className="border p-2 sm:p-3 text-right text-white">
                                   استلمت من
                                 </th>
-
-                                <th className="border p-2 sm:p-3 text-right">
+                                <th className="border p-2 sm:p-3 text-right text-white">
                                   البلد / المدينة
                                 </th>
-                                <th className="border p-2 sm:p-3 text-right">
+                                <th className="border p-2 sm:p-3 text-right text-white">
                                   المبلغ
                                 </th>
-                                <th className="border p-2 sm:p-3 text-right">
+                                <th className="border p-2 sm:p-3 text-right text-white">
                                   العملة
                                 </th>
                               </tr>
@@ -964,10 +1007,10 @@ export function CompanyReport({
                         </h3>
                         <div className="overflow-x-auto">
                           <table
-                            className="min-w-full border border-gray-300 text-xs sm:text-sm rounded-xl overflow-hidden"
+                            className="min-w-full border border-gray-300 text-xs sm:text-sm rounded-xl overflow-hidden font-sans text-[#212E5B]"
                             dir="rtl"
                           >
-                            <thead className="sticky top-0 z-10 bg-[#212E5B] text-white">
+                            <thead>
                               <tr>
                                 <th className="border p-2 sm:p-3 text-right">
                                   التاريخ
@@ -1053,7 +1096,7 @@ export function CompanyReport({
                     );
                   })()}
 
-                {/* Buy From Table - شراء من */}
+                {/* Buy From Table - عمليات الشراء */}
                 {(!selectedTransactionType ||
                   selectedTransactionType === "buy") &&
                   (() => {
@@ -1121,14 +1164,14 @@ export function CompanyReport({
                         )}
 
                         <h3 className="text-[#212E5B] font-bold mb-3 text-right text-base sm:text-lg">
-                          شراء من
+                          عمليات الشراء
                         </h3>
                         <div className="overflow-x-auto">
                           <table
-                            className="min-w-full border border-gray-300 text-xs sm:text-sm rounded-xl overflow-hidden"
+                            className="min-w-full border border-gray-300 text-xs sm:text-sm rounded-xl overflow-hidden font-sans text-[#212E5B]"
                             dir="rtl"
                           >
-                            <thead className="sticky top-0 z-10 bg-[#212E5B] text-white">
+                            <thead>
                               <tr>
                                 <th className="border p-2 sm:p-3 text-right">
                                   التاريخ
@@ -1237,7 +1280,7 @@ export function CompanyReport({
                     );
                   })()}
 
-                {/* Sell To Table - بيع إلى */}
+                {/* Sell To Table - عمليات البيع */}
                 {(!selectedTransactionType ||
                   selectedTransactionType === "sell_to") &&
                   (() => {
@@ -1306,14 +1349,14 @@ export function CompanyReport({
                         )}
 
                         <h3 className="text-[#212E5B] font-bold mb-3 text-right text-base sm:text-lg">
-                          بيع إلى
+                          عمليات البيع
                         </h3>
                         <div className="overflow-x-auto">
                           <table
-                            className="min-w-full border border-gray-300 text-xs sm:text-sm rounded-xl overflow-hidden"
+                            className="min-w-full border border-gray-300 text-xs sm:text-sm rounded-xl overflow-hidden font-sans text-[#212E5B]"
                             dir="rtl"
                           >
-                            <thead className="sticky top-0 z-10 bg-[#212E5B] text-white">
+                            <thead>
                               <tr>
                                 <th className="border p-2 sm:p-3 text-right">
                                   التاريخ
@@ -1374,8 +1417,6 @@ export function CompanyReport({
                                     )}
                                   </td>
 
-                                  {/* 
-                                
                                   {/* Account */}
                                   <td className="border p-1 sm:p-2">
                                     {t.customerAccount?.account || "-"}
@@ -1421,6 +1462,23 @@ export function CompanyReport({
                     );
                   })()}
               </div>
+              </div>
+            </div>
+            {/* End of Web Layout */}
+
+            {/* Printable Component - Hidden on screen, used for ReactToPrint */}
+            <div className="hidden">
+              <PrintableCompanyReport
+                ref={printRef}
+                data={filteredTransactions}
+                currencyTotals={currencyNetTotals}
+                transactionCounts={transactionCounts}
+                dateRange={{ fromDate, toDate }}
+                currencies={currencies}
+                buyCurrencyData={buyCurrencyData}
+                sellCurrencyData={sellCurrencyData}
+                selectedTransactionType={selectedTransactionType}
+              />
             </div>
           </div>
         </div>

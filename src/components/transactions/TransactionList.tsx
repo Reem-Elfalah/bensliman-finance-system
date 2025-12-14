@@ -1,5 +1,5 @@
 // src/transactions/TransactionList.tsx
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { format } from "date-fns";
 import { ar } from "date-fns/locale";
@@ -15,6 +15,7 @@ import { Button } from "../ui/Button";
 import { InvoiceGenerator } from "../invoice/InvoiceGenerator";
 import { ReportGenerator, Transaction } from "../Reports/reports";
 import { supabase } from "../../lib/supabase";
+import Portal from "../Portal";
 
 interface TransactionListProps {
   transactions: Transaction[];
@@ -300,7 +301,8 @@ export function TransactionList({
                               المبلغ النهائي:
                             </span>
                             <p className="font-bold text-xl md:text-2xl text-gray-900">
-                              {((transaction.price ?? 0) * (transaction.rate ?? 1)).toLocaleString()}{" "}
+                              {/* {transaction.price}{" "} */}
+                              {(transaction.fx_final_amount ?? 0).toLocaleString()}{" "}
                               {transaction.currency_final }
                             </p>
 
@@ -374,11 +376,13 @@ export function TransactionList({
       </div>
 
       {selectedTransaction && showInvoice && (
-        <InvoiceGenerator
-          transaction={selectedTransaction}
-          isOpen={showInvoice}
-          onClose={handleCloseInvoice}
-        />
+        <Portal>
+          <InvoiceGenerator
+            transaction={selectedTransaction}
+            isOpen={showInvoice}
+            onClose={handleCloseInvoice}
+          />
+        </Portal>
       )}
 
       {selectedReportTransaction && showReport && (

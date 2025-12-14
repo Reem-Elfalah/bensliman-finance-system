@@ -8,7 +8,7 @@ import Customers from "./components/customers";
 import CustomerProfile from "./components/CustomerProfile";
 import Treasury from "./components/Treasury";
 
-import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 
 function App() {
   const { user, loading, signIn, signUp } = useAuth();
@@ -37,6 +37,8 @@ function App() {
       <Routes>
         {/* Dashboard route */}
         <Route path="/dashboard" element={<Dashboard />} />
+        {/* Home route - redirects to dashboard or login */}
+        <Route path="/home" element={user ? <Navigate to="/dashboard" replace /> : <Navigate to="/" replace />} />
 
         {/* Root route */}
         <Route
@@ -84,6 +86,8 @@ function App() {
         {/* treasury page */}
         <Route path="/treasury" element={<Treasury />} />
 
+        {/* Catch all - redirect unknown routes to home */}
+        <Route path="*" element={<Navigate to="/" replace />} />
 
       </Routes>
     </Router>

@@ -178,6 +178,10 @@ export default function CustomersPage() {
 
     switch (sortBy) {
       case "recent-transactions":
+        // Sort by transaction count (most to least), then by latest transaction date
+        if (bInfo.totalTransactionCount !== aInfo.totalTransactionCount) {
+          return bInfo.totalTransactionCount - aInfo.totalTransactionCount;
+        }
         if (aInfo.latestTransactionDate && bInfo.latestTransactionDate) {
           return (
             new Date(bInfo.latestTransactionDate).getTime() -
@@ -302,42 +306,49 @@ const handleDeleteCustomer = async (customerId: string) => {
     }
   };
 
-  // Enhanced Pagination component that shows selected page as first visible
+  // Condensed Pagination component
   const Pagination = () => {
     if (totalPages <= 1) return null;
 
-    const scrollContainerRef = useRef<HTMLDivElement>(null);
-
-    // Function to handle page click and scroll to show selected page as first
+    // Function to handle page click
     const handlePageClick = (page: number) => {
       setCurrentPage(page);
     };
 
-    // Auto-scroll to show selected page as first visible when it changes
-    useEffect(() => {
-      const scrollContainer = scrollContainerRef.current;
-      if (scrollContainer) {
-        // Calculate the position to scroll to (show selected page as first)
-        const buttonWidth = 40; // Approximate width of each button including gap
-        const scrollPosition = (currentPage - 1) * buttonWidth;
-
-        setTimeout(() => {
-          if (scrollContainerRef.current) {
-            scrollContainerRef.current.scrollTo({
-              left: scrollPosition,
-              behavior: "smooth",
-            });
-          }
-        }, 50);
-      }
-    }, [currentPage]);
-
+    // Condensed pagination algorithm
     const getPageNumbers = () => {
-      const pages = [];
-      // Always show ALL pages, but container will be scrollable
-      for (let i = 1; i <= totalPages; i++) {
-        pages.push(i);
+      const pages: (number | string)[] = [];
+      
+      if (totalPages <= 7) {
+        // Show all pages if 7 or fewer
+        return Array.from({ length: totalPages }, (_, i) => i + 1);
       }
+      
+      if (currentPage === 1) {
+        // On first page, show: 1 2 3 ... total
+        pages.push(1);
+        if (totalPages > 1) pages.push(2);
+        if (totalPages > 2) pages.push(3);
+        if (totalPages > 3) pages.push("...");
+        if (totalPages > 1) pages.push(totalPages);
+      } else if (currentPage === totalPages) {
+        // On last page, show: 1 ... total-2 total-1 total
+        pages.push(1);
+        if (totalPages > 2) pages.push("...");
+        if (totalPages > 2) pages.push(totalPages - 2);
+        if (totalPages > 1) pages.push(totalPages - 1);
+        pages.push(totalPages);
+      } else {
+        // Middle pages: 1 ... X-1 X X+1 ... total
+        pages.push(1);
+        if (currentPage > 3) pages.push("...");
+        if (currentPage > 2) pages.push(currentPage - 1);
+        pages.push(currentPage);
+        if (currentPage < totalPages - 1) pages.push(currentPage + 1);
+        if (currentPage < totalPages - 2) pages.push("...");
+        pages.push(totalPages);
+      }
+      
       return pages;
     };
 
@@ -368,25 +379,42 @@ const handleDeleteCustomer = async (customerId: string) => {
             />
           </Button>
 
-          {/* Scrollable Page Numbers Container - Shows ALL pages */}
+          {/* Condensed Page Numbers Container */}
           <div
-            ref={scrollContainerRef}
-            className="flex items-center gap-1 max-w-[200px] sm:max-w-[300px] lg:max-w-[400px] xl:max-w-[500px] overflow-x-auto scrollbar-hide px-2 py-1"
+            className="flex items-center gap-1 flex-wrap justify-center"
+            dir="rtl"
           >
-            {getPageNumbers().map((page) => (
-              <Button
-                key={page}
-                onClick={() => handlePageClick(page)}
-                variant={currentPage === page ? "default" : "outline"}
-                className={`h-8 w-8 sm:h-9 sm:w-9 min-w-[2rem] sm:min-w-[2.25rem] p-0 text-xs sm:text-sm font-bold flex-shrink-0 transition-all ${currentPage === page
-                  ? "bg-[#212E5B] text-white border-[#212E5B] scale-105"
-                  : "border-gray-300 hover:border-[#212E5B] hover:scale-105"
+            {getPageNumbers().map((page, index) => {
+              if (page === "...") {
+                return (
+                  <span
+                    key={`ellipsis-${index}`}
+                    className="px-2 py-1 text-gray-500 text-sm"
+                  >
+                    ...
+                  </span>
+                );
+              }
+              
+              const pageNum = page as number;
+              const isCurrentPage = pageNum === currentPage;
+              
+              return (
+                <Button
+                  key={pageNum}
+                  onClick={() => handlePageClick(pageNum)}
+                  variant={isCurrentPage ? "default" : "outline"}
+                  className={`h-8 w-8 sm:h-9 sm:w-9 min-w-[2rem] sm:min-w-[2.25rem] p-0 text-xs sm:text-sm font-bold flex-shrink-0 transition-all ${
+                    isCurrentPage
+                      ? "bg-[#212E5B] text-white border-[#212E5B] scale-105"
+                      : "border-gray-300 hover:border-[#212E5B] hover:scale-105"
                   }`}
-                size="sm"
-              >
-                {page}
-              </Button>
-            ))}
+                  size="sm"
+                >
+                  {pageNum}
+                </Button>
+              );
+            })}
           </div>
 
           {/* Next Button - Bigger and Bolder */}

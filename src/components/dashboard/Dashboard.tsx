@@ -46,20 +46,79 @@ export function Dashboard() {
   const [selectedType, setSelectedType] = useState<
     "exit" | "sell_to" | "buy" | "entry"
   >("exit");
+  const [filterType, setFilterType] = useState<
+    "exit" | "sell_to" | "buy" | "entry" | null
+  >(null);
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
   const [allTransactions, setAllTransactions] = useState<any[]>([]);
   const [loadingAll, setLoadingAll] = useState(false);
+  const [allUserTransactions, setAllUserTransactions] = useState<any[]>([]);
+  const [loadingAllUser, setLoadingAllUser] = useState(false);
 
   const navigate = useNavigate();
 
-  const filteredTransactions = userTransactions.filter((t) => {
-    const trxDate = new Date(t.created_at).toISOString().split("T")[0];
-    if (dateFrom && dateTo) return trxDate >= dateFrom && trxDate <= dateTo;
-    if (dateFrom) return trxDate >= dateFrom;
-    if (dateTo) return trxDate <= dateTo;
+  // Fetch all user transactions when filtering is active (type or date)
+  useEffect(() => {
+    const hasFilters = filterType || dateFrom || dateTo;
+    if (hasFilters && user?.id) {
+      setLoadingAllUser(true);
+      supabase
+        .from("transactions")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .then(({ data, error }) => {
+          if (error) {
+            console.error("Error fetching all user transactions:", error);
+            setAllUserTransactions([]);
+          } else {
+            setAllUserTransactions(data || []);
+          }
+          setLoadingAllUser(false);
+        });
+    } else {
+      setAllUserTransactions([]);
+    }
+    // Reset page when filter changes
+    setPage(1);
+  }, [filterType, dateFrom, dateTo, user?.id]);
+
+  // Determine which transactions to use and apply filtering
+  const hasFilters = filterType || dateFrom || dateTo;
+  const transactionsToFilter = hasFilters ? allUserTransactions : userTransactions;
+  const pageSize = 10;
+
+  const filteredTransactions = transactionsToFilter.filter((t) => {
+    // Filter by type if selected
+    if (filterType && t.type !== filterType) {
+      return false;
+    }
+    // Filter by date based on created_at
+    if (dateFrom || dateTo) {
+      const trxDate = new Date(t.created_at).toISOString().split("T")[0];
+      if (dateFrom && dateTo) {
+        if (!(trxDate >= dateFrom && trxDate <= dateTo)) return false;
+      } else if (dateFrom) {
+        if (!(trxDate >= dateFrom)) return false;
+      } else if (dateTo) {
+        if (!(trxDate <= dateTo)) return false;
+      }
+    }
     return true;
   });
+
+  // Calculate pagination for filtered results
+  const filteredTotalCount = filteredTransactions.length;
+  const filteredPageCount = Math.ceil(filteredTotalCount / pageSize);
+  const paginatedFilteredTransactions = hasFilters
+    ? filteredTransactions.slice((page - 1) * pageSize, page * pageSize)
+    : filteredTransactions;
+
+  // Use filtered pagination when filtering, otherwise use server pagination
+  const displayTransactions = hasFilters ? paginatedFilteredTransactions : filteredTransactions;
+  const displayTotalCount = hasFilters ? filteredTotalCount : totalCount;
+  const displayLoading = hasFilters ? loadingAllUser : transactionsLoading;
 
 
 
@@ -112,11 +171,7 @@ export function Dashboard() {
       customer_id: data.customer_id ?? null,
       user_id: user.id,
       type: selectedType,
-      from_account: data.from_account ?? "",
-      from_account_name: data.from_account_name ?? "",
-      to_account: data.to_account ?? "",
       to_account_name: data.to_account_name ?? "",
-      ReferenceName: data.ReferenceName ?? "",
       amount: data.amount ?? 0,
       currency: data.currency ?? "LYD",
       notes: data.notes ?? "",
@@ -126,18 +181,12 @@ export function Dashboard() {
       fee: data.fee ?? 0,
       fee_currency: data.fee_currency ?? "LYD",
       category: data.category ?? "Deposit",
-      fx_base_currency: data.fx_base_currency ?? "",
-      fx_base_amount: data.fx_base_amount ?? 0,
-      fx_quote_currency: data.fx_quote_currency ?? "",
-      fx_quote_amount: data.fx_quote_amount ?? 0,
-      fx_direction: data.fx_direction,
       rate: data.rate ?? 0,
       deliver_to: data.deliver_to ?? "",
       CustomerName: data.CustomerName ?? "",
-      beneficiary: data.beneficiary ?? "",
-      Treasury: data.Treasury ?? null,
       customerAccount: data.customerAccount ?? null,
       currency_final: data.currency_final  ?? "الدينار الليبي",
+      conversion_method: data.conversion_method ?? "MULTIPLY",
     };
 
     console.log(" Transaction payload with Treasury:", transactionPayload);
@@ -268,36 +317,89 @@ export function Dashboard() {
           transition={{ delay: 0.1 }}
           className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-6 sm:mb-8"
         >
-          {transactionTypes.map((type) => (
-            <Card key={type.key} className="p-4 sm:p-6" hover>
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <type.icon
-                    className={`h-6 w-6 sm:h-8 sm:w-8 ${type.color}`}
-                  />
+          {transactionTypes.map((type) => {
+            const isFiltered = filterType === type.key;
+            return (
+              <Card
+                key={type.key}
+                className={`p-4 sm:p-6 cursor-pointer transition-all ${
+                  isFiltered
+                    ? "ring-4 ring-blue-500 bg-blue-50 border-blue-300"
+                    : "hover:shadow-lg"
+                }`}
+                hover
+                onClick={() => {
+                  // Toggle filter: if already filtered by this type, clear it; otherwise set it
+                  if (isFiltered) {
+                    setFilterType(null);
+                  } else {
+                    setFilterType(type.key);
+                  }
+                }}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center">
+                    <div className="flex-shrink-0">
+                      <type.icon
+                        className={`h-6 w-6 sm:h-8 sm:w-8 ${type.color}`}
+                      />
+                    </div>
+                    <div className="mr-3 sm:mr-4 ml-0">
+                      <p className="text-xs sm:text-sm font-medium text-gray-500">
+                        {type.label}
+                      </p>
+                      <p className="text-lg sm:text-2xl font-bold text-gray-900">
+                        {
+                          stats[
+                          type.key === "sell_to"
+                            ? "sales"
+                            : type.key === "buy"
+                              ? "purchases"
+                              : type.key === "entry"
+                                ? "entries"
+                                : "exits"
+                          ]
+                        }
+                      </p>
+                    </div>
+                  </div>
+                  {isFiltered && (
+                    <div className="flex-shrink-0">
+                      <span className="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold">
+                        ✓
+                      </span>
+                    </div>
+                  )}
                 </div>
-                <div className="mr-3 sm:mr-4 ml-0">
-                  <p className="text-xs sm:text-sm font-medium text-gray-500">
-                    {type.label}
-                  </p>
-                  <p className="text-lg sm:text-2xl font-bold text-gray-900">
-                    {
-                      stats[
-                      type.key === "sell_to"
-                        ? "sales"
-                        : type.key === "buy"
-                          ? "purchases"
-                          : type.key === "entry"
-                            ? "entries"
-                            : "exits"
-                      ]
-                    }
-                  </p>
-                </div>
+              </Card>
+            );
+          })}
+        </motion.div>
+        
+        {/* Filter Indicator */}
+        {filterType && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mb-4"
+          >
+            <Card className="p-3 bg-blue-50 border-blue-200">
+              <div className="flex items-center justify-center gap-3">
+                <span className="text-sm font-medium text-gray-700">
+                  يتم عرض: {transactionTypes.find((t) => t.key === filterType)?.label}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setFilterType(null)}
+                  className="text-red-500 text-sm"
+                >
+                  إزالة الفلتر
+                </Button>
               </div>
             </Card>
-          ))}
-        </motion.div>
+          </motion.div>
+        )}
 
         {/* Quick Actions */}
         <motion.div
@@ -429,62 +531,124 @@ export function Dashboard() {
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
               <h2 className="text-lg font-semibold text-gray-900">
                 المعاملات{" "}
+                {filterType && (
+                  <span className="text-blue-600">
+                    ({transactionTypes.find((t) => t.key === filterType)?.label})
+                  </span>
+                )}{" "}
                 {dateFrom || dateTo
                   ? `من ${dateFrom || "..."} إلى ${dateTo || "..."}`
                   : "الأخيرة"}
                 <span className="text-sm text-gray-500 mr-2">
-                  (
-                  {dateFrom || dateTo
-                    ? filteredTransactions.length
-                    : totalCount}
-                  )
+                  ({displayTotalCount})
                 </span>
               </h2>
             </div>
 
             <div className="overflow-x-auto">
               <TransactionList
-                transactions={filteredTransactions}
-                loading={transactionsLoading}
+                transactions={displayTransactions}
+                loading={displayLoading}
               />
             </div>
 
             {/* Pagination Controls */}
-            {totalCount > 10 && (
-              <div className="flex flex-wrap justify-center items-center mt-4 gap-2">
-                <Button
-                  variant="outline"
-                  disabled={page === 1}
-                  onClick={() => setPage((p) => p - 1)}
-                  size="sm"
-                  className="text-sm"
-                >
-                  السابق
-                </Button>
-
-                {Array.from({ length: Math.ceil(totalCount / 10) }, (_, i) => (
+            {displayTotalCount > 10 && (() => {
+              const totalPages = hasFilters 
+                ? filteredPageCount 
+                : Math.ceil(displayTotalCount / 10);
+              
+              // Condensed pagination algorithm
+              const getPaginationPages = (current: number, total: number): (number | string)[] => {
+                const pages: (number | string)[] = [];
+                
+                if (total <= 7) {
+                  return Array.from({ length: total }, (_, i) => i + 1);
+                }
+                
+                // Always show first page
+                if (current === 1) {
+                  // On first page, show: 1 2 3 ... total
+                  pages.push(1);
+                  if (total > 1) pages.push(2);
+                  if (total > 2) pages.push(3);
+                  if (total > 3) pages.push("...");
+                  if (total > 1) pages.push(total);
+                } else if (current === total) {
+                  // On last page, show: 1 ... total-2 total-1 total
+                  pages.push(1);
+                  if (total > 2) pages.push("...");
+                  if (total > 2) pages.push(total - 2);
+                  if (total > 1) pages.push(total - 1);
+                  pages.push(total);
+                } else {
+                  // Middle pages: 1 ... X-1 X X+1 ... total
+                  pages.push(1);
+                  if (current > 3) pages.push("...");
+                  if (current > 2) pages.push(current - 1);
+                  pages.push(current);
+                  if (current < total - 1) pages.push(current + 1);
+                  if (current < total - 2) pages.push("...");
+                  pages.push(total);
+                }
+                
+                return pages;
+              };
+              
+              const paginationPages = getPaginationPages(page, totalPages);
+              
+              return (
+                <div className="flex flex-wrap justify-center items-center mt-4 gap-2" dir="rtl">
                   <Button
-                    key={i + 1}
-                    variant={page === i + 1 ? "primary" : "outline"}
-                    onClick={() => setPage(i + 1)}
+                    variant="outline"
+                    disabled={page === 1}
+                    onClick={() => setPage((p) => p - 1)}
                     size="sm"
-                    className="text-sm min-w-[40px]"
+                    className="text-sm"
                   >
-                    {i + 1}
+                    Previous
                   </Button>
-                ))}
 
-                <Button
-                  variant="outline"
-                  disabled={page === Math.ceil(totalCount / 10)}
-                  onClick={() => setPage((p) => p + 1)}
-                  size="sm"
-                  className="text-sm"
-                >
-                  التالي
-                </Button>
-              </div>
-            )}
+                  {paginationPages.map((pageNum, index) => {
+                    if (pageNum === "...") {
+                      return (
+                        <span
+                          key={`ellipsis-${index}`}
+                          className="px-2 text-gray-500 text-sm"
+                        >
+                          ...
+                        </span>
+                      );
+                    }
+                    
+                    const pageNumber = pageNum as number;
+                    const isCurrentPage = pageNumber === page;
+                    
+                    return (
+                      <Button
+                        key={pageNumber}
+                        variant={isCurrentPage ? "primary" : "outline"}
+                        onClick={() => setPage(pageNumber)}
+                        size="sm"
+                        className="text-sm min-w-[40px]"
+                      >
+                        {pageNumber}
+                      </Button>
+                    );
+                  })}
+
+                  <Button
+                    variant="outline"
+                    disabled={page === totalPages}
+                    onClick={() => setPage((p) => p + 1)}
+                    size="sm"
+                    className="text-sm"
+                  >
+                    Next
+                  </Button>
+                </div>
+              );
+            })()}
           </Card>
         </motion.div>
       </div>
