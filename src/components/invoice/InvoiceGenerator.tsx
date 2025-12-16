@@ -1157,7 +1157,7 @@ export function InvoiceGenerator({
                     {/* Total Amount */}
                     {(editedTransaction.type === "buy" || editedTransaction.type === "sell_to") && (
                       <div className="mb-6 text-[#212E5B] text-sm font-bold text-right">
-                        * المبلغ: {formatNumber(getTotalAmount())} {editedTransaction.currency_final ?? "الدينار الليبي"}
+                        * المبلغ: {formatNumber(editedTransaction.fx_final_amount)} {editedTransaction.currency_final ?? "الدينار الليبي"}
                       </div>
                     )}
 
